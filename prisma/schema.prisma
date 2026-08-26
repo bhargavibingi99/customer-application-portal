@@ -1,0 +1,133 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ---------------------------------------------------------------------------
+// People & organisation
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String        @id @default(uuid())
+  name         String
+  email        String        @unique
+  role         String        @default("EXECUTIVE") // ADMIN | MANAGER | EXECUTIVE
+  teamId       String?
+  team         Team?         @relation(fields: [teamId], references: [id])
+  applications Application[] @relation("AssignedApplications")
+  workItems    WorkItem[]    @relation("AssignedWorkItems")
+  activityLogs ActivityLog[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([teamId])
+}
+
+model Team {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  members   User[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Customers & applications
+// ---------------------------------------------------------------------------
+
+model Customer {
+  id           String        @id @default(uuid())
+  name         String
+  email        String        @unique
+  company      String
+  phone        String?
+  applications Application[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model Application {
+  id          String @id @default(uuid())
+  title       String
+  description String
+  priority    String @default("MEDIUM") // LOW | MEDIUM | HIGH | CRITICAL
+  stage       String @default("NEW")    // NEW | WAITING_FOR_INFO | IN_PROGRESS | UNDER_REVIEW | COMPLETED
+
+  // Optimistic locking: incremented on every successful update so two users
+  // editing the same record cannot silently overwrite each other.
+  version Int @default(1)
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  assignedUserId String?
+  assignedUser   User?   @relation("AssignedApplications", fields: [assignedUserId], references: [id])
+
+  workItems    WorkItem[]
+  activityLogs ActivityLog[]
+
+  // External system synchronisation state.
+  syncStatus     String    @default("NOT_REQUIRED") // NOT_REQUIRED | PENDING | SUCCESS | FAILED
+  syncAttempts   Int       @default(0)
+  lastSyncError  String?
+  lastSyncedAt   DateTime?
+  // Stable key so retries are treated as the same logical request downstream.
+  idempotencyKey String    @unique @default(uuid())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([customerId])
+  @@index([assignedUserId])
+  @@index([stage])
+  @@index([priority])
+}
+
+// ---------------------------------------------------------------------------
+// Work breakdown
+// ---------------------------------------------------------------------------
+
+model WorkItem {
+  id     String @id @default(uuid())
+  title  String
+  status String @default("PENDING") // PENDING | IN_PROGRESS | COMPLETED
+
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  assignedUserId String?
+  assignedUser   User?   @relation("AssignedWorkItems", fields: [assignedUserId], references: [id])
+
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([applicationId])
+  @@index([assignedUserId])
+}
+
+// ---------------------------------------------------------------------------
+// Audit trail
+// ---------------------------------------------------------------------------
+
+model ActivityLog {
+  id      String @id @default(uuid())
+  action  String // CREATED | STAGE_CHANGED | ASSIGNED | REASSIGNED | UPDATED | WORK_ITEM_* | SYNC_*
+  details String
+
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  // Nullable so system-generated events (e.g. background sync) can be recorded.
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([applicationId])
+  @@index([createdAt])
+}
